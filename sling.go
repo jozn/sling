@@ -275,7 +275,8 @@ func (s *Sling) Context(ctx context.Context) *Sling {
 }
 
 // Timeout is a convenience method for calling Context with a context
-// returned by WithTimeout on top of the Background context.
+// returned by WithTimeout on top of the existing context (or Background
+// context if none already exists)
 //
 // Its cancel function is called when Do, or its shorthands Receive and
 // ReceiveSuccess, are called and return. If there's a chance you won't be
@@ -285,7 +286,10 @@ func (s *Sling) Context(ctx context.Context) *Sling {
 // Because contexts cannot be reused, a Sling with a context also cannot be
 // reused, nor used as a base for other Slings with New.
 func (s *Sling) Timeout(d time.Duration) *Sling {
-	ctx, cancel := withTimeout(context.Background(), d)
+	if s.ctx == nil {
+		s.ctx = context.Background()
+	}
+	ctx, cancel := withTimeout(s.ctx, d)
 	s.cancel = cancel
 	return s.Context(ctx)
 }
