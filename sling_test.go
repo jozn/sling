@@ -653,6 +653,16 @@ func TestRequest_reused_context(t *testing.T) {
 	}
 }
 
+func TestRequest_context_and_timeout(t *testing.T) {
+	type key string
+	ctx := context.WithValue(context.Background(), key("foo"), "bar")
+	sling := New().Context(ctx).Timeout(100 * time.Second)
+	req, _ := sling.Request()
+	if req.Context().Value(key("foo")) != "bar" {
+		t.Errorf("Context method didn't set the context on the resulting Request")
+	}
+}
+
 type doerFunc func(req *http.Request) (*http.Response, error)
 
 func (f doerFunc) Do(req *http.Request) (*http.Response, error) {
