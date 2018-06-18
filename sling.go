@@ -44,6 +44,8 @@ type Sling struct {
 	ctx context.Context
 	// to be called on Do to avoid context leaks
 	cancel context.CancelFunc
+	// request timeout
+	timeout time.Duration
 }
 
 // New returns a new Sling with an http DefaultClient.
@@ -286,15 +288,27 @@ func (s *Sling) Context(ctx context.Context) *Sling {
 // Because contexts cannot be reused, a Sling with a context also cannot be
 // reused, nor used as a base for other Slings with New.
 func (s *Sling) Timeout(d time.Duration) *Sling {
-	if s.ctx == nil {
-		s.ctx = context.Background()
-	}
-	ctx, cancel := withTimeout(s.ctx, d)
-	s.cancel = cancel
-	return s.Context(ctx)
+	s.timeout = d
+	return s
 }
 
 var withTimeout = context.WithTimeout
+
+// context adds timeout to existing context (or to Background context if it
+// doesn't exist) when defined, otherwise it just returns the context set
+// through Context (if any)
+func (s *Sling) context() context.Context {
+	if s.timeout == 0 {
+		return s.ctx
+	}
+	if s.ctx == nil {
+		s.ctx = context.Background()
+	}
+	ctx, cancel := withTimeout(s.ctx, s.timeout)
+	s.cancel = cancel
+	s.ctx = ctx
+	return ctx
+}
 
 // Requests
 
@@ -323,7 +337,7 @@ func (s *Sling) Request() (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.ctx != nil {
+	if ctx := s.context(); ctx != nil {
 		req = req.WithContext(s.ctx)
 	}
 	addHeaders(req, s.header)
