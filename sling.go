@@ -44,6 +44,8 @@ type Sling struct {
 	ctx context.Context
 	// to be called on Do to avoid context leaks
 	cancel context.CancelFunc
+	// request timeout
+	timeout time.Duration
 }
 
 // New returns a new Sling with an http DefaultClient.
@@ -275,7 +277,8 @@ func (s *Sling) Context(ctx context.Context) *Sling {
 }
 
 // Timeout is a convenience method for calling Context with a context
-// returned by WithTimeout on top of the Background context.
+// returned by WithTimeout on top of the existing context (or Background
+// context if none already exists)
 //
 // Its cancel function is called when Do, or its shorthands Receive and
 // ReceiveSuccess, are called and return. If there's a chance you won't be
@@ -285,12 +288,25 @@ func (s *Sling) Context(ctx context.Context) *Sling {
 // Because contexts cannot be reused, a Sling with a context also cannot be
 // reused, nor used as a base for other Slings with New.
 func (s *Sling) Timeout(d time.Duration) *Sling {
-	ctx, cancel := withTimeout(context.Background(), d)
-	s.cancel = cancel
-	return s.Context(ctx)
+	s.timeout = d
+	return s
 }
 
 var withTimeout = context.WithTimeout
+
+// buildContext builds a new context using existing one (or context.Background
+// if none exists) with a timeout if timeout is defined. Otherwise context is
+// left untouched.
+func (s *Sling) buildContext() context.Context {
+	if s.timeout == 0 {
+		return s.ctx
+	}
+	if s.ctx == nil {
+		s.ctx = context.Background()
+	}
+	s.ctx, s.cancel = withTimeout(s.ctx, s.timeout)
+	return s.ctx
+}
 
 // Requests
 
@@ -319,8 +335,8 @@ func (s *Sling) Request() (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	if s.ctx != nil {
-		req = req.WithContext(s.ctx)
+	if ctx := s.buildContext(); ctx != nil {
+		req = req.WithContext(ctx)
 	}
 	addHeaders(req, s.header)
 	return req, err
