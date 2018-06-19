@@ -294,20 +294,18 @@ func (s *Sling) Timeout(d time.Duration) *Sling {
 
 var withTimeout = context.WithTimeout
 
-// context adds timeout to existing context (or to Background context if it
-// doesn't exist) when defined, otherwise it just returns the context set
-// through Context (if any)
-func (s *Sling) context() context.Context {
+// buildContext builds a new context using existing one (or context.Background
+// if none exists) with a timeout if timeout is defined. Otherwise context is
+// left untouched.
+func (s *Sling) buildContext() context.Context {
 	if s.timeout == 0 {
 		return s.ctx
 	}
 	if s.ctx == nil {
 		s.ctx = context.Background()
 	}
-	ctx, cancel := withTimeout(s.ctx, s.timeout)
-	s.cancel = cancel
-	s.ctx = ctx
-	return ctx
+	s.ctx, s.cancel = withTimeout(s.ctx, s.timeout)
+	return s.ctx
 }
 
 // Requests
@@ -337,8 +335,8 @@ func (s *Sling) Request() (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	if ctx := s.context(); ctx != nil {
-		req = req.WithContext(s.ctx)
+	if ctx := s.buildContext(); ctx != nil {
+		req = req.WithContext(ctx)
 	}
 	addHeaders(req, s.header)
 	return req, err
