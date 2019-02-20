@@ -1,10 +1,13 @@
 package sling
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	goquery "github.com/google/go-querystring/query"
 )
@@ -38,6 +41,12 @@ type Sling struct {
 	bodyProvider BodyProvider
 	// response decoder
 	responseDecoder ResponseDecoder
+	// context for a request
+	ctx context.Context
+	// to be called on Do to avoid context leaks
+	cancel context.CancelFunc
+	// request timeout
+	timeout time.Duration
 }
 
 // New returns a new Sling with an http DefaultClient.
@@ -51,6 +60,8 @@ func New() *Sling {
 	}
 }
 
+var errContextReused = errors.New("(*Sling).New: cannot reuse context from base Sling")
+
 // New returns a copy of a Sling for creating a new Sling with properties
 // from a parent Sling. For example,
 //
@@ -63,7 +74,13 @@ func New() *Sling {
 //
 // Note that query and body values are copied so if pointer values are used,
 // mutating the original value will mutate the value within the child Sling.
+//
+// Because contexts can't be reused, New panics if a non-nil context was
+// set on the base Sling.
 func (s *Sling) New() *Sling {
+	if s.ctx != nil {
+		panic(errContextReused)
+	}
 	// copy Headers pairs into new Header map
 	headerCopy := make(http.Header)
 	for k, v := range s.header {
@@ -271,6 +288,47 @@ func (s *Sling) BodyForm(bodyForm interface{}) *Sling {
 	return s.BodyProvider(formBodyProvider{payload: bodyForm})
 }
 
+// Context sets the context for the request.
+//
+// Because contexts cannot be reused, a Sling with a context also cannot be
+// reused, nor used as a base for other Slings with New.
+func (s *Sling) Context(ctx context.Context) *Sling {
+	s.ctx = ctx
+	return s
+}
+
+// Timeout is a convenience method for calling Context with a context
+// returned by WithTimeout on top of the existing context (or Background
+// context if none already exists)
+//
+// Its cancel function is called when Do, or its shorthands Receive and
+// ReceiveSuccess, are called and return. If there's a chance you won't be
+// calling those, use the Context method instead and make sure you call the
+// cancel function in all cases. Otherwise, you'll have a context leak.
+//
+// Because contexts cannot be reused, a Sling with a context also cannot be
+// reused, nor used as a base for other Slings with New.
+func (s *Sling) Timeout(d time.Duration) *Sling {
+	s.timeout = d
+	return s
+}
+
+var withTimeout = context.WithTimeout
+
+// buildContext builds a new context using existing one (or context.Background
+// if none exists) with a timeout if timeout is defined. Otherwise context is
+// left untouched.
+func (s *Sling) buildContext() context.Context {
+	if s.timeout == 0 {
+		return s.ctx
+	}
+	if s.ctx == nil {
+		s.ctx = context.Background()
+	}
+	s.ctx, s.cancel = withTimeout(s.ctx, s.timeout)
+	return s.ctx
+}
+
 // Requests
 
 // Request returns a new http.Request created with the Sling properties.
@@ -297,6 +355,9 @@ func (s *Sling) Request() (*http.Request, error) {
 	req, err := http.NewRequest(s.method, reqURL.String(), body)
 	if err != nil {
 		return nil, err
+	}
+	if ctx := s.buildContext(); ctx != nil {
+		req = req.WithContext(ctx)
 	}
 	addHeaders(req, s.header)
 	return req, err
@@ -375,6 +436,10 @@ func (s *Sling) Receive(successV, failureV interface{}) (*http.Response, error) 
 // are JSON decoded into the value pointed to by failureV.
 // Any error sending the request or decoding the response is returned.
 func (s *Sling) Do(req *http.Request, successV, failureV interface{}) (*http.Response, error) {
+	if s.cancel != nil {
+		defer s.cancel()
+	}
+
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return resp, err
